@@ -47,6 +47,36 @@ def open_3d_explorer(app):
     _run_build_and_view(app, parent, out_path)
 
 
+@tool(id='zstack_3d_open_saved', label='Open Saved 3D Volume...', menu='Tools', order=851)
+def open_saved_volume(app):
+    from tkinter import filedialog, messagebox
+
+    parent = _parent(app)
+
+    if not _deps_ok():
+        messagebox.showerror(
+            'Missing dependency',
+            'Opening a saved 3D volume needs zarr and ome-zarr.\n\n'
+            'Install with:\n\n    pip install flimkit-zstack-explorer',
+            parent=parent)
+        return
+
+    path = filedialog.askdirectory(
+        parent=parent, title='Open a saved 3D volume (OME-Zarr)', mustexist=True)
+    if not path:
+        return
+
+    from ome_zarr.io import parse_url
+    if parse_url(path) is None:
+        messagebox.showerror(
+            'Not an OME-Zarr store',
+            f"{path}\n\ndoesn't look like an OME-Zarr store saved by this tool.",
+            parent=parent)
+        return
+
+    _launch_viewer(path, parent)
+
+
 def _run_build_and_view(app, parent, out_path):
     import threading
     from flimkit.UI.progress_window import ProgressWindow

@@ -14,10 +14,21 @@ and opens a popout 3D viewer with the two volumes side by side.
   display code (the same path used when you drag the z-slider), so the
   volume matches what's on screen slice by slice.
 - Saves a 2-channel OME-Zarr store (channel 0 = intensity, channel 1 =
-  lifetime in ns, NaN where a slice had no per-pixel fit).
+  lifetime in ns, NaN where a slice had no per-pixel fit). Saving to a path
+  that already has a store from a previous run overwrites it.
 - Opens a [PyVista](https://pyvista.org) volume viewer in its own process —
   intensity on the left, FLIM lifetime on the right, camera-linked — so it
   doesn't compete with FLIMKit's Tkinter UI for the main thread.
+- Intensity is clipped to its 99th percentile before rendering, the same
+  clip FLIMKit's own 2D intensity view uses, so a few hot pixels don't wash
+  out the whole volume.
+- The FLIM pane has live sliders for the lifetime min/max color range
+  (defaulting to the 2nd/98th percentile, like FLIMKit's "Auto" scale
+  button) and a colormap picker with the same palette as FLIMKit's 2D FLIM
+  view (hsv, viridis, cool, hot, twilight).
+- **Tools > Open Saved 3D Volume...** reopens a `.zarr` store from a
+  previous run — no z-stack needs to be loaded for this one, it just opens
+  the viewer against whatever store you point it at.
 
 ## Install
 
