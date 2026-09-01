@@ -5,7 +5,46 @@ pytest.importorskip('pyvista', reason='requires the [gui] extra')
 
 import pyvista as pv
 
-from flimkit_zstack_explorer.viewer import COLORMAPS, _set_lifetime_colormap, show
+from flimkit_zstack_explorer.viewer import (
+    COLORMAPS, _masked_grid, _set_lifetime_colormap, show,
+)
+
+
+def test_masked_grid_drops_exact_cell_count():
+    shape = (10, 20, 24)
+    dims = tuple(np.array(shape)[::-1] + 1)
+    rng = np.random.default_rng(0)
+
+    intensity = rng.poisson(50, size=shape).astype(np.float32)
+    zero_idx = rng.choice(intensity.size, 500, replace=False)
+    intensity.flat[zero_idx] = 0
+    grid = _masked_grid(intensity, intensity > 0, 'intensity', dims, (1.0, 1.0, 1.0))
+    assert grid.n_cells == intensity.size - 500
+
+    lifetime = rng.uniform(1.5, 3.5, size=shape).astype(np.float32)
+    lifetime[3] = np.nan  # a whole slice with no per-pixel fit
+    grid = _masked_grid(lifetime, np.isfinite(lifetime), 'lifetime_ns', dims, (1.0, 1.0, 1.0))
+    assert grid.n_cells == lifetime.size - shape[1] * shape[2]
+
+
+def test_masked_grid_all_dropped_yields_empty_grid():
+    shape = (2, 4, 4)
+    dims = tuple(np.array(shape)[::-1] + 1)
+    values = np.zeros(shape, dtype=np.float32)
+    grid = _masked_grid(values, values > 0, 'intensity', dims, (1.0, 1.0, 1.0))
+    assert grid.n_cells == 0
+
+
+def test_show_handles_all_zero_intensity_and_all_nan_lifetime(monkeypatch):
+    # Must not crash even when every voxel is masked out in one or both
+    # volumes (add_volume errors on an empty grid, so show() has to skip it).
+    pv.OFF_SCREEN = True
+    monkeypatch.setattr(pv.Plotter, 'show', lambda self, *a, **k: None)
+
+    intensity = np.zeros((3, 8, 8), dtype=np.float32)
+    lifetime = np.full((3, 8, 8), np.nan, dtype=np.float32)
+
+    show(intensity, lifetime)
 
 
 def _spy_on_add_volume(monkeypatch):

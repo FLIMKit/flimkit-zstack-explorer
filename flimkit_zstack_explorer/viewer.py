@@ -30,6 +30,24 @@ def _set_lifetime_colormap(actor, name):
     actor.mapper.lookup_table = lut
 
 
+def _masked_grid(values, mask, name, dimensions, spacing):
+    """Build an ImageData for `values` and drop every cell where `mask` is
+    False, via a threshold filter.
+
+    A volume mapper's own opacity/NaN handling doesn't reliably drop
+    individual voxels (tested: NaN cells with nan_opacity=0 still render as
+    solid fill), so masked-out voxels are removed from the geometry outright
+    rather than made transparent.
+    """
+    import pyvista as pv
+    grid = pv.ImageData()
+    grid.dimensions = dimensions
+    grid.spacing = spacing
+    grid.cell_data[name] = np.where(mask, values, 0).flatten(order='F')
+    grid.cell_data['_mask'] = mask.astype(np.float32).flatten(order='F')
+    return grid.threshold(0.5, scalars='_mask')
+
+
 def show(intensity_stack: np.ndarray, lifetime_stack: np.ndarray, *,
          voxel_size_um=(1.0, 1.0, 1.0), title: str = 'FLIMKit 3D Z-stack Explorer'):
     try:
@@ -38,28 +56,21 @@ def show(intensity_stack: np.ndarray, lifetime_stack: np.ndarray, *,
         _missing_pyvista()
         return
 
-    spacing = tuple(float(v) for v in voxel_size_um)
+    spacing = tuple(float(v) for v in voxel_size_um)[::-1]
+    dimensions = tuple(np.array(intensity_stack.shape)[::-1] + 1)
 
     # Clipped to the 99th percentile, same as FLIMKit's own 2D intensity
     # view (flimkit/UI/fov_preview.py), so a handful of hot pixels don't
-    # wash out the whole volume's opacity ramp.
+    # wash out the whole volume's opacity ramp. Zero-intensity voxels (no
+    # signal) are dropped from the geometry entirely.
     intensity_clip = np.percentile(intensity_stack, 99) if intensity_stack.size else 1.0
     intensity_clipped = np.clip(intensity_stack, 0, intensity_clip)
+    intensity_grid = _masked_grid(
+        intensity_clipped, intensity_stack > 0, 'intensity', dimensions, spacing)
 
-    intensity_grid = pv.ImageData()
-    intensity_grid.dimensions = np.array(intensity_stack.shape)[::-1] + 1
-    intensity_grid.spacing = spacing[::-1]
-    intensity_grid.cell_data['intensity'] = intensity_clipped.flatten(order='F')
-
-    # Background (no-fit / no-signal) voxels are pinned to 0, which is below
-    # any real lifetime in the data, so the 'linear' opacity transfer
-    # function fades them out automatically without needing a second
-    # per-voxel opacity field.
-    lifetime_grid = pv.ImageData()
-    lifetime_grid.dimensions = np.array(lifetime_stack.shape)[::-1] + 1
-    lifetime_grid.spacing = spacing[::-1]
-    finite_lifetime = np.where(np.isfinite(lifetime_stack), lifetime_stack, 0.0)
-    lifetime_grid.cell_data['lifetime_ns'] = finite_lifetime.flatten(order='F')
+    # Voxels with no per-pixel fit (NaN lifetime) are dropped the same way.
+    lifetime_grid = _masked_grid(
+        lifetime_stack, np.isfinite(lifetime_stack), 'lifetime_ns', dimensions, spacing)
 
     valid_lifetime = lifetime_stack[np.isfinite(lifetime_stack)]
     if valid_lifetime.size:
@@ -77,44 +88,50 @@ def show(intensity_stack: np.ndarray, lifetime_stack: np.ndarray, *,
     plotter = pv.Plotter(shape=(1, 2), title=title)
 
     plotter.subplot(0, 0)
-    plotter.add_volume(intensity_grid, scalars='intensity', cmap='inferno',
-                        opacity='linear', name='intensity')
+    if intensity_grid.n_cells:
+        plotter.add_volume(intensity_grid, scalars='intensity', cmap='inferno',
+                            opacity='linear', name='intensity')
+    else:
+        plotter.add_text('No intensity signal', font_size=10, color='grey')
     plotter.add_text('Intensity', font_size=12)
     plotter.add_axes()
 
     plotter.subplot(0, 1)
-    lifetime_actor = plotter.add_volume(
-        lifetime_grid, scalars='lifetime_ns', cmap='viridis',
-        opacity='linear', name='lifetime', show_scalar_bar=False)
-    lifetime_actor.mapper.scalar_range = (vmin, vmax)
-    plotter.add_scalar_bar('lifetime (ns)', mapper=lifetime_actor.mapper)
+    if lifetime_grid.n_cells:
+        lifetime_actor = plotter.add_volume(
+            lifetime_grid, scalars='lifetime_ns', cmap='viridis',
+            opacity='linear', name='lifetime', show_scalar_bar=False)
+        lifetime_actor.mapper.scalar_range = (vmin, vmax)
+        plotter.add_scalar_bar('lifetime (ns)', mapper=lifetime_actor.mapper)
+
+        def set_vmin(value):
+            _, hi = lifetime_actor.mapper.scalar_range
+            lo = min(float(value), hi)
+            lifetime_actor.mapper.scalar_range = (lo, hi)
+            plotter.update_scalar_bar_range((lo, hi))
+
+        def set_vmax(value):
+            lo, _ = lifetime_actor.mapper.scalar_range
+            hi = max(float(value), lo)
+            lifetime_actor.mapper.scalar_range = (lo, hi)
+            plotter.update_scalar_bar_range((lo, hi))
+
+        def set_cmap(name):
+            _set_lifetime_colormap(lifetime_actor, name)
+
+        plotter.add_slider_widget(
+            set_vmin, rng=(lt_min, lt_max), value=vmin, title='lifetime min (ns)',
+            pointa=(0.52, 0.92), pointb=(0.98, 0.92), style='modern')
+        plotter.add_slider_widget(
+            set_vmax, rng=(lt_min, lt_max), value=vmax, title='lifetime max (ns)',
+            pointa=(0.52, 0.80), pointb=(0.98, 0.80), style='modern')
+        plotter.add_text_slider_widget(
+            set_cmap, data=COLORMAPS, value=COLORMAPS.index('viridis'),
+            pointa=(0.52, 0.68), pointb=(0.98, 0.68), style='modern')
+    else:
+        plotter.add_text('No per-pixel fit data', font_size=10, color='grey')
     plotter.add_text('FLIM (lifetime)', font_size=12)
     plotter.add_axes()
-
-    def set_vmin(value):
-        _, hi = lifetime_actor.mapper.scalar_range
-        lo = min(float(value), hi)
-        lifetime_actor.mapper.scalar_range = (lo, hi)
-        plotter.update_scalar_bar_range((lo, hi))
-
-    def set_vmax(value):
-        lo, _ = lifetime_actor.mapper.scalar_range
-        hi = max(float(value), lo)
-        lifetime_actor.mapper.scalar_range = (lo, hi)
-        plotter.update_scalar_bar_range((lo, hi))
-
-    def set_cmap(name):
-        _set_lifetime_colormap(lifetime_actor, name)
-
-    plotter.add_slider_widget(
-        set_vmin, rng=(lt_min, lt_max), value=vmin, title='lifetime min (ns)',
-        pointa=(0.52, 0.92), pointb=(0.98, 0.92), style='modern')
-    plotter.add_slider_widget(
-        set_vmax, rng=(lt_min, lt_max), value=vmax, title='lifetime max (ns)',
-        pointa=(0.52, 0.80), pointb=(0.98, 0.80), style='modern')
-    plotter.add_text_slider_widget(
-        set_cmap, data=COLORMAPS, value=COLORMAPS.index('viridis'),
-        pointa=(0.52, 0.68), pointb=(0.98, 0.68), style='modern')
 
     plotter.link_views()
     plotter.show()
