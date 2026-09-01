@@ -1,4 +1,6 @@
 from __future__ import annotations
+import os
+import shutil
 from typing import Optional, Sequence
 
 import numpy as np
@@ -31,6 +33,14 @@ def save_ome_zarr(
     import zarr
     from ome_zarr.io import parse_url
     from ome_zarr.writer import write_image
+
+    # ome-zarr's 'w' mode doesn't clear an existing store, so writing to the
+    # same path twice (the save dialog defaults to the same filename every
+    # run) hits leftover array nodes from the previous write.
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    elif os.path.exists(path):
+        os.remove(path)
 
     data = np.stack([
         np.nan_to_num(intensity_stack, nan=0.0).astype(np.float32),

@@ -24,6 +24,22 @@ def test_roundtrip(tmp_path):
     assert np.allclose(l2[1:], lifetime[1:])
 
 
+def test_saving_to_same_path_twice_overwrites(tmp_path):
+    # The save dialog defaults to the same filename every run, so re-running
+    # the tool against a path that already has a store must overwrite it
+    # rather than hitting ome-zarr's ContainsArrayError on leftover nodes.
+    intensity = np.full((3, 8, 8), 10.0, dtype=np.float32)
+    lifetime = np.full((3, 8, 8), 2.0, dtype=np.float32)
+    path = str(tmp_path / 'zstack_volume.zarr')
+
+    save_ome_zarr(path, intensity, lifetime)
+    save_ome_zarr(path, intensity * 2, lifetime + 1)
+
+    i2, l2 = load_ome_zarr(path)
+    assert np.allclose(i2, 20.0)
+    assert np.allclose(l2, 3.0)
+
+
 def test_shape_mismatch_raises(tmp_path):
     intensity = np.zeros((3, 4, 4), dtype=np.float32)
     lifetime = np.zeros((3, 5, 5), dtype=np.float32)

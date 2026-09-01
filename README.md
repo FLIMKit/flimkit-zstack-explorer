@@ -22,12 +22,26 @@ and opens a popout 3D viewer with the two volumes side by side.
 ## Install
 
 ```
-pip install flimkit-zstack-explorer[gui]
+pip install 'flimkit-zstack-explorer[gui]'
 ```
+
+Quote it — in zsh (macOS's default shell), an unquoted `[gui]` is a glob
+pattern and the command fails with "no matches found" without installing
+anything.
 
 `[gui]` adds PyVista, which does the actual 3D rendering. Without it, the
 volume-building and OME-Zarr saving still work, but the viewer step will
 tell you it's missing and how to install it.
+
+Install it into the same Python environment FLIMKit itself runs from —
+a separate environment or a different `python`/`pip` on your `PATH` will
+install cleanly but leave FLIMKit unable to see it. Verify with:
+
+```bash
+python -c "import flimkit_zstack_explorer, pyvista; print('ok')"
+```
+
+run from the same terminal you launch FLIMKit from.
 
 FLIMKit discovers this through the `flimkit.plugins` entry point, so there's
 nothing else to wire up. On start it appears under Tools.

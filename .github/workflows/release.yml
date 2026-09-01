@@ -34,7 +34,7 @@ jobs:
             them as OME-Zarr, and opens a PyVista popout viewer.
 
             ```
-            pip install flimkit-zstack-explorer[gui]
+            pip install 'flimkit-zstack-explorer[gui]'
             ```
 
             FLIMKit discovers it through the `flimkit.plugins` entry point, so
