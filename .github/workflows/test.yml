@@ -42,7 +42,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: pyvista/setup-headless-display-action@v2
+      - name: Install headless display packages (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1 libglx-mesa0
 
       - name: Install FLIMKit
         run: |
@@ -57,4 +60,4 @@ jobs:
       - name: Run tests (including the offscreen PyVista viewer)
         env:
           PYVISTA_OFF_SCREEN: 'true'
-        run: pytest -q --timeout=120 --timeout-method=thread
+        run: xvfb-run -a pytest -q --timeout=120 --timeout-method=thread
