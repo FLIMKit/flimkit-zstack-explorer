@@ -40,7 +40,7 @@ def open_3d_explorer(app):
     out_path = filedialog.asksaveasfilename(
         parent=parent, title='Save 3D volume as OME-Zarr',
         defaultextension='.zarr', initialfile='zstack_volume.zarr',
-        filetypes=[('OME-Zarr store', '*.zarr'), ('All files', '*')])
+        filetypes=[('OME-Zarr store', '*.zarr')])
     if not out_path:
         return
 
