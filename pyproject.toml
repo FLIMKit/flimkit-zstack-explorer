@@ -1,0 +1,30 @@
+[build-system]
+requires = ['setuptools>=68']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'flimkit-zstack-explorer'
+version = '0.1.0'
+description = '3D intensity and FLIM volume explorer for FLIMKit z-stacks'
+readme = 'README.md'
+requires-python = '>=3.12'
+license = 'MIT'
+authors = [
+    {name = 'Alex Hunt', email = 'alexander.hunt@ed.ac.uk'},
+]
+keywords = ['FLIM', 'fluorescence', 'lifetime', 'z-stack', '3D', 'zarr', 'pyvista']
+dependencies = [
+    'numpy',
+    'zarr>=2.16',
+    'ome-zarr>=0.9',
+]
+
+[project.optional-dependencies]
+gui = ['pyvista>=0.44']
+test = ['pytest']
+
+[project.entry-points.'flimkit.plugins']
+flimkit_zstack_explorer = 'flimkit_zstack_explorer'
+
+[tool.setuptools.packages.find]
+include = ['flimkit_zstack_explorer*']
