@@ -14,6 +14,8 @@ import numpy as np
 # volume offers the same palette as FLIMKit's own 2D lifetime view.
 COLORMAPS = ['hsv', 'viridis', 'cool', 'hot', 'twilight']
 
+DEFAULT_POINT_SIZE = 4
+
 
 def _missing_pyvista():
     sys.stderr.write(
@@ -24,28 +26,37 @@ def _missing_pyvista():
 
 
 def _set_lifetime_colormap(actor, name):
+    # No opacity ramp here: every point already represents a real, valid
+    # voxel (masking is handled by the point simply not existing), so
+    # fading by lifetime value would misleadingly make short lifetimes look
+    # less "real" than long ones. Points are fully opaque.
     import pyvista as pv
-    lut = pv.LookupTable(cmap=name)
-    lut.apply_opacity('linear')
-    actor.mapper.lookup_table = lut
+    actor.mapper.lookup_table = pv.LookupTable(cmap=name)
 
 
-def _masked_grid(values, mask, name, dimensions, spacing):
-    """Build an ImageData for `values` and drop every cell where `mask` is
-    False, via a threshold filter.
+def _point_cloud(values, mask, scalar_name, spacing_xyz):
+    """Build a point cloud of only the voxels where `mask` is True.
 
-    A volume mapper's own opacity/NaN handling doesn't reliably drop
-    individual voxels (tested: NaN cells with nan_opacity=0 still render as
-    solid fill), so masked-out voxels are removed from the geometry outright
-    rather than made transparent.
+    Real FLIM z-stacks are dominated by background: in one exported stack,
+    92% of lifetime voxels had no per-pixel fit. Volume rendering
+    (add_volume) resamples the data onto a dense 3D texture before ray
+    casting, and that resampling fills scattered single-voxel gaps from
+    their valid neighbors -- verified directly: masking those voxels out of
+    an UnstructuredGrid and volume-rendering it still showed a solid block
+    for scattered per-pixel dropout, even though a single large contiguous
+    dropped region rendered correctly as empty. A point cloud has no
+    interpolation step to paper over gaps with -- a voxel with no data
+    simply has no point, so there is nothing to render there.
     """
     import pyvista as pv
-    grid = pv.ImageData()
-    grid.dimensions = dimensions
-    grid.spacing = spacing
-    grid.cell_data[name] = np.where(mask, values, 0).flatten(order='F')
-    grid.cell_data['_mask'] = mask.astype(np.float32).flatten(order='F')
-    return grid.threshold(0.5, scalars='_mask')
+    z, y, x = np.nonzero(mask)
+    if z.size == 0:
+        return None
+    sx, sy, sz = spacing_xyz
+    points = np.column_stack([x * sx, y * sy, z * sz]).astype(np.float32)
+    cloud = pv.PolyData(points)
+    cloud.point_data[scalar_name] = values[mask].astype(np.float32)
+    return cloud
 
 
 def show(intensity_stack: np.ndarray, lifetime_stack: np.ndarray, *,
@@ -56,21 +67,20 @@ def show(intensity_stack: np.ndarray, lifetime_stack: np.ndarray, *,
         _missing_pyvista()
         return
 
-    spacing = tuple(float(v) for v in voxel_size_um)[::-1]
-    dimensions = tuple(np.array(intensity_stack.shape)[::-1] + 1)
+    sz, sy, sx = (float(v) for v in voxel_size_um)
 
     # Clipped to the 99th percentile, same as FLIMKit's own 2D intensity
     # view (flimkit/UI/fov_preview.py), so a handful of hot pixels don't
-    # wash out the whole volume's opacity ramp. Zero-intensity voxels (no
-    # signal) are dropped from the geometry entirely.
+    # wash out the color scale. Zero-intensity voxels (no signal) have no
+    # point at all.
     intensity_clip = np.percentile(intensity_stack, 99) if intensity_stack.size else 1.0
     intensity_clipped = np.clip(intensity_stack, 0, intensity_clip)
-    intensity_grid = _masked_grid(
-        intensity_clipped, intensity_stack > 0, 'intensity', dimensions, spacing)
+    intensity_cloud = _point_cloud(
+        intensity_clipped, intensity_stack > 0, 'intensity', (sx, sy, sz))
 
-    # Voxels with no per-pixel fit (NaN lifetime) are dropped the same way.
-    lifetime_grid = _masked_grid(
-        lifetime_stack, np.isfinite(lifetime_stack), 'lifetime_ns', dimensions, spacing)
+    # Voxels with no per-pixel fit (NaN lifetime) get no point either.
+    lifetime_cloud = _point_cloud(
+        lifetime_stack, np.isfinite(lifetime_stack), 'lifetime_ns', (sx, sy, sz))
 
     valid_lifetime = lifetime_stack[np.isfinite(lifetime_stack)]
     if valid_lifetime.size:
@@ -88,19 +98,21 @@ def show(intensity_stack: np.ndarray, lifetime_stack: np.ndarray, *,
     plotter = pv.Plotter(shape=(1, 2), title=title)
 
     plotter.subplot(0, 0)
-    if intensity_grid.n_cells:
-        plotter.add_volume(intensity_grid, scalars='intensity', cmap='inferno',
-                            opacity='linear', name='intensity')
+    if intensity_cloud is not None:
+        plotter.add_points(intensity_cloud, scalars='intensity', cmap='inferno',
+                            point_size=DEFAULT_POINT_SIZE,
+                            render_points_as_spheres=False, name='intensity')
     else:
         plotter.add_text('No intensity signal', font_size=10, color='grey')
     plotter.add_text('Intensity', font_size=12)
     plotter.add_axes()
 
     plotter.subplot(0, 1)
-    if lifetime_grid.n_cells:
-        lifetime_actor = plotter.add_volume(
-            lifetime_grid, scalars='lifetime_ns', cmap='viridis',
-            opacity='linear', name='lifetime', show_scalar_bar=False)
+    if lifetime_cloud is not None:
+        lifetime_actor = plotter.add_points(
+            lifetime_cloud, scalars='lifetime_ns', cmap='viridis',
+            point_size=DEFAULT_POINT_SIZE, render_points_as_spheres=False,
+            name='lifetime', show_scalar_bar=False)
         lifetime_actor.mapper.scalar_range = (vmin, vmax)
         plotter.add_scalar_bar('lifetime (ns)', mapper=lifetime_actor.mapper)
 

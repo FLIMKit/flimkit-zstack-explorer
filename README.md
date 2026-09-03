@@ -16,12 +16,20 @@ and opens a popout 3D viewer with the two volumes side by side.
 - Saves a 2-channel OME-Zarr store (channel 0 = intensity, channel 1 =
   lifetime in ns, NaN where a slice had no per-pixel fit). Saving to a path
   that already has a store from a previous run overwrites it.
-- Opens a [PyVista](https://pyvista.org) volume viewer in its own process —
-  intensity on the left, FLIM lifetime on the right, camera-linked — so it
-  doesn't compete with FLIMKit's Tkinter UI for the main thread.
+- Opens a [PyVista](https://pyvista.org) point-cloud viewer in its own
+  process — intensity on the left, FLIM lifetime on the right,
+  camera-linked — so it doesn't compete with FLIMKit's Tkinter UI for the
+  main thread. Each voxel with data is one point; a voxel with no data (zero
+  intensity, or no per-pixel fit) has no point at all. This is deliberately
+  not volume rendering: real z-stacks are dominated by background (one
+  export had 92% NaN lifetime voxels), and a volume mapper resamples onto a
+  dense 3D texture before ray casting, which fills scattered single-voxel
+  gaps in from their valid neighbors — verified directly, a masked-out
+  region rendered as solid fill unless it was one large contiguous block. A
+  point cloud has no such resampling step to paper over gaps with.
 - Intensity is clipped to its 99th percentile before rendering, the same
   clip FLIMKit's own 2D intensity view uses, so a few hot pixels don't wash
-  out the whole volume.
+  out the color scale.
 - The FLIM pane has live sliders for the lifetime min/max color range
   (defaulting to the 2nd/98th percentile, like FLIMKit's "Auto" scale
   button) and a colormap picker with the same palette as FLIMKit's 2D FLIM

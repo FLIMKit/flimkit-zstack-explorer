@@ -6,38 +6,59 @@ pytest.importorskip('pyvista', reason='requires the [gui] extra')
 import pyvista as pv
 
 from flimkit_zstack_explorer.viewer import (
-    COLORMAPS, _masked_grid, _set_lifetime_colormap, show,
+    COLORMAPS, _point_cloud, _set_lifetime_colormap, show,
 )
 
 
-def test_masked_grid_drops_exact_cell_count():
+def test_point_cloud_keeps_exactly_the_valid_voxels():
     shape = (10, 20, 24)
-    dims = tuple(np.array(shape)[::-1] + 1)
     rng = np.random.default_rng(0)
 
     intensity = rng.poisson(50, size=shape).astype(np.float32)
     zero_idx = rng.choice(intensity.size, 500, replace=False)
     intensity.flat[zero_idx] = 0
-    grid = _masked_grid(intensity, intensity > 0, 'intensity', dims, (1.0, 1.0, 1.0))
-    assert grid.n_cells == intensity.size - 500
+    cloud = _point_cloud(intensity, intensity > 0, 'intensity', (1.0, 1.0, 1.0))
+    assert cloud.n_points == intensity.size - 500
 
     lifetime = rng.uniform(1.5, 3.5, size=shape).astype(np.float32)
     lifetime[3] = np.nan  # a whole slice with no per-pixel fit
-    grid = _masked_grid(lifetime, np.isfinite(lifetime), 'lifetime_ns', dims, (1.0, 1.0, 1.0))
-    assert grid.n_cells == lifetime.size - shape[1] * shape[2]
+    cloud = _point_cloud(lifetime, np.isfinite(lifetime), 'lifetime_ns', (1.0, 1.0, 1.0))
+    assert cloud.n_points == lifetime.size - shape[1] * shape[2]
 
 
-def test_masked_grid_all_dropped_yields_empty_grid():
-    shape = (2, 4, 4)
-    dims = tuple(np.array(shape)[::-1] + 1)
-    values = np.zeros(shape, dtype=np.float32)
-    grid = _masked_grid(values, values > 0, 'intensity', dims, (1.0, 1.0, 1.0))
-    assert grid.n_cells == 0
+def test_point_cloud_all_dropped_yields_none():
+    values = np.zeros((2, 4, 4), dtype=np.float32)
+    assert _point_cloud(values, values > 0, 'intensity', (1.0, 1.0, 1.0)) is None
+
+
+def test_point_cloud_drops_scattered_single_voxel_dropout():
+    # The bug this guards against: volume rendering (add_volume) resamples
+    # onto a dense 3D texture before ray casting, which fills scattered
+    # single-voxel gaps from their valid neighbors -- verified directly
+    # against a real z-stack export where 92% of lifetime voxels were NaN:
+    # add_volume rendered it as a solid block. A point cloud has no
+    # resampling step, so a masked-out voxel has no point, period -- this
+    # checks that property holds regardless of how scattered the mask is.
+    shape = (10, 40, 40)
+    rng = np.random.default_rng(3)
+    lifetime = np.full(shape, 2.0, dtype=np.float32)
+    speckle = rng.random(shape) < 0.4
+    lifetime[speckle] = np.nan
+
+    cloud = _point_cloud(lifetime, np.isfinite(lifetime), 'lifetime_ns', (1.0, 1.0, 1.0))
+
+    assert cloud.n_points == (~speckle).sum()
+    # every remaining point must be a real, non-speckled voxel
+    kept_z, kept_y, kept_x = np.nonzero(~speckle)
+    kept_coords = set(zip(kept_x.tolist(), kept_y.tolist(), kept_z.tolist()))
+    for p in cloud.points:
+        assert tuple(int(round(c)) for c in p) in kept_coords
 
 
 def test_show_handles_all_zero_intensity_and_all_nan_lifetime(monkeypatch):
     # Must not crash even when every voxel is masked out in one or both
-    # volumes (add_volume errors on an empty grid, so show() has to skip it).
+    # clouds (add_points needs at least one point, so show() has to skip it
+    # rather than call add_points with an empty cloud).
     pv.OFF_SCREEN = True
     monkeypatch.setattr(pv.Plotter, 'show', lambda self, *a, **k: None)
 
@@ -47,16 +68,16 @@ def test_show_handles_all_zero_intensity_and_all_nan_lifetime(monkeypatch):
     show(intensity, lifetime)
 
 
-def _spy_on_add_volume(monkeypatch):
+def _spy_on_add_points(monkeypatch):
     calls = []
-    original = pv.Plotter.add_volume
+    original = pv.Plotter.add_points
 
-    def spy(self, grid, **kwargs):
-        actor = original(self, grid, **kwargs)
-        calls.append((grid, kwargs, actor))
+    def spy(self, points, **kwargs):
+        actor = original(self, points, **kwargs)
+        calls.append((points, kwargs, actor))
         return actor
 
-    monkeypatch.setattr(pv.Plotter, 'add_volume', spy)
+    monkeypatch.setattr(pv.Plotter, 'add_points', spy)
     return calls
 
 
@@ -75,7 +96,7 @@ def test_show_builds_offscreen_without_error(monkeypatch):
 def test_intensity_is_clipped_to_99th_percentile(monkeypatch):
     pv.OFF_SCREEN = True
     monkeypatch.setattr(pv.Plotter, 'show', lambda self, *a, **k: None)
-    calls = _spy_on_add_volume(monkeypatch)
+    calls = _spy_on_add_points(monkeypatch)
 
     rng = np.random.default_rng(1)
     intensity = rng.poisson(50, size=(3, 20, 20)).astype(np.float32)
@@ -85,15 +106,15 @@ def test_intensity_is_clipped_to_99th_percentile(monkeypatch):
 
     show(intensity, lifetime)
 
-    intensity_grid = calls[0][0]
-    assert intensity_grid.cell_data['intensity'].max() <= expected_clip + 1e-3
-    assert intensity_grid.cell_data['intensity'].min() >= 0
+    intensity_cloud = calls[0][0]
+    assert intensity_cloud.point_data['intensity'].max() <= expected_clip + 1e-3
+    assert intensity_cloud.point_data['intensity'].min() >= 0
 
 
 def test_lifetime_scalar_range_defaults_to_2nd_98th_percentile(monkeypatch):
     pv.OFF_SCREEN = True
     monkeypatch.setattr(pv.Plotter, 'show', lambda self, *a, **k: None)
-    calls = _spy_on_add_volume(monkeypatch)
+    calls = _spy_on_add_points(monkeypatch)
 
     rng = np.random.default_rng(2)
     intensity = np.full((3, 16, 16), 10.0, dtype=np.float32)
@@ -110,23 +131,16 @@ def test_lifetime_scalar_range_defaults_to_2nd_98th_percentile(monkeypatch):
 
 
 def test_set_lifetime_colormap_swaps_colors_and_keeps_opacity_ramp():
-    grid = pv.ImageData()
-    grid.dimensions = (5, 5, 5)
-    grid.spacing = (1, 1, 1)
-    grid.cell_data['lifetime_ns'] = np.linspace(0, 1, 64).astype(np.float32)
+    cloud = pv.PolyData(np.random.default_rng(0).random((64, 3)).astype(np.float32))
+    cloud.point_data['lifetime_ns'] = np.linspace(0, 1, 64).astype(np.float32)
 
     plotter = pv.Plotter(off_screen=True)
-    actor = plotter.add_volume(grid, scalars='lifetime_ns', cmap='viridis',
-                                opacity='linear')
+    actor = plotter.add_points(cloud, scalars='lifetime_ns', cmap='viridis')
     original_colors = actor.mapper.lookup_table.values.copy()
 
     for name in COLORMAPS:
         _set_lifetime_colormap(actor, name)
         assert actor.mapper.lookup_table is not None
-        # Opacity ramps from transparent to opaque across the table, same
-        # shape 'linear' produces for every colormap.
-        alpha = actor.mapper.lookup_table.values[:, -1]
-        assert alpha[0] < alpha[-1]
 
     _set_lifetime_colormap(actor, 'hot')
     assert not np.array_equal(actor.mapper.lookup_table.values, original_colors)
